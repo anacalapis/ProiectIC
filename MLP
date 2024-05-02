@@ -5,17 +5,6 @@ import torch.nn.functional as F
 ### MLP with lienar output
 class MLP(nn.Module):
     def __init__(self, num_layers, input_dim, hidden_dim, output_dim):
-        '''
-            num_layers: number of layers in the neural networks (EXCLUDING the input layer). If num_layers=1, this reduces to linear model.
-            input_dim: dimensionality of input features
-            hidden_dim: dimensionality of hidden units at ALL layers
-            output_dim: number of classes for prediction
-            device: which device to use
-
-            eu am inteles ca se creează rețeaua cu un input layer, hidden layers și putput layer
-            după fiecare hidden layer avem un alt layer special (batch) în care se activează hidden layerul 
-        '''
-    
         super(MLP, self).__init__()
 
         self.linear_or_not = True #default is linear model
@@ -24,7 +13,7 @@ class MLP(nn.Module):
         if num_layers < 1:
             raise ValueError("number of layers should be positive!")
         elif num_layers == 1:
-            #Linear model
+            #Linear model- nu are hidden layer
             self.linear = nn.Linear(input_dim, output_dim)
             #input_dim=specifies the size of the input feature space.
             #output_dim=Each input sample will be transformed into a vector of size output_dim after passing through this linear layer.
@@ -35,7 +24,7 @@ class MLP(nn.Module):
             self.linears = torch.nn.ModuleList()
             self.batch_norms = torch.nn.ModuleList() #la fel ca la linears, bathc_norms reprezinta o lista de ceva, vedem...
 
-            #se creează structura GNN, un input layer, hidden layers și output layer
+            #se creează structura MLP, un input layer, hidden layers și output layer
             self.linears.append(nn.Linear(input_dim, hidden_dim))
             for layer in range(num_layers - 2):
                 self.linears.append(nn.Linear(hidden_dim, hidden_dim))
@@ -43,9 +32,11 @@ class MLP(nn.Module):
 
             #Overall, this loop iterates over the hidden layers of the MLP and appends batch normalization layers
             #These batch normalization layers will be used to normalize the activations of the hidden layers during training
+            #după fiecare Linear layer va venii un Batch layer
             for layer in range(num_layers - 1):
                 self.batch_norms.append(nn.BatchNorm1d((hidden_dim)))
 
+    #functia care leagă totul
     def forward(self, x):
         if self.linear_or_not:
             #If linear model
