@@ -4,6 +4,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
+import matplotlib.pyplot as plt
+import networkx as nx
+from torch_geometric.datasets import TUDataset
+from torch_geometric.utils import to_networkx
 
 from tqdm import tqdm
 
@@ -88,7 +92,7 @@ def main():
                         help='input batch size for training (default: 32)')
     parser.add_argument('--iters_per_epoch', type=int, default=50,
                         help='number of iterations per each epoch (default: 50)')
-    parser.add_argument('--epochs', type=int, default=350,
+    parser.add_argument('--epochs', type=int, default=10,
                         help='number of epochs to train (default: 350)')
     parser.add_argument('--lr', type=float, default=0.01,
                         help='learning rate (default: 0.01)')
@@ -125,27 +129,57 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(0)
 
-    graphs, num_classes = load_data(args.dataset, args.degree_as_tag)
+    graphs, num_classes = load_data(args.dataset, args.degree_as_tag)    
 
+    
+
+    # # Load MUTAG dataset
+    # dataset = TUDataset(root='/dataset/MUTAG', name='MUTAG')
+
+    # # Plot three graphs in a single row
+    # num_graphs = len(dataset)
+    # num_rows = num_graphs // 4 + (num_graphs % 4 > 0)  # Calculate number of rows
+    
+    # # Plot the graphs with three graphs per row
+    # for i in range(0, num_graphs, 4):
+    #     fig, axs = plt.subplots(1, 4, figsize=(18, 6))  # Create subplots with 3 columns
+    
+    #     for j in range(4):
+    #         idx = i + j
+    #         if idx < num_graphs:
+    #             data = dataset[idx]
+    #             G = to_networkx(data, to_undirected=True)  # Convert to NetworkX graph
+    #             nx.draw(G, ax=axs[j], with_labels=True, node_color='skyblue', node_size=500, edge_color='gray')  # Draw the graph
+    #             axs[j].set_title("Graph {} Visualization".format(idx+1))  # Set title for the plot
+    
+    #     plt.tight_layout()
+    #     plt.show()
+
+
+    
     ##10-fold cross validation. Conduct an experiment on the fold specified by args.fold_idx.
     train_graphs, test_graphs = separate_data(graphs, args.seed, args.fold_idx)
 
-    model = GraphCNN(args.num_layers, args.num_mlp_layers, train_graphs[0].node_features.shape[1], args.hidden_dim, num_classes, args.final_dropout, args.learn_eps, args.graph_pooling_type, args.neighbor_pooling_type, device).to(device)
+    model = GIN(args.num_layers, args.num_mlp_layers, train_graphs[0].node_features.shape[1], args.hidden_dim, num_classes, args.final_dropout, args.learn_eps, args.graph_pooling_type, args.neighbor_pooling_type, device).to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.5)
 
     index=0
+    train_acc_values = []
+    test_acc_values = []
     for epoch in range(1, args.epochs + 1):
         scheduler.step()
         
         
         avg_loss = train(args, model, device, train_graphs, optimizer, epoch)
         acc_train, acc_test = test(args, model, device, train_graphs, test_graphs, epoch)
+        train_acc_values.append(acc_train)
+        test_acc_values.append(acc_test)
         
         print(f"epoch:{index}      loss training:{avg_loss}     train accuracy:{acc_train}     test accuracy:{acc_test}")
         index=index+1
-        
+
         if not args.filename == "":
             with open(args.filename, 'w') as f:
                 f.write("%f %f %f" % (avg_loss, acc_train, acc_test))
@@ -153,7 +187,14 @@ def main():
         #print("")
 
         #print(model.eps)
-    
+    plt.plot(range(1, args.epochs + 1), train_acc_values, label='Train Accuracy')
+    plt.plot(range(1, args.epochs + 1), test_acc_values, label='Test Accuracy')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
+    plt.title('Train and Test Accuracy')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
 
 if __name__ == '__main__':
     main()
