@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import sys
 sys.path.append("models/")
 
-class GraphCNN(nn.Module):
+class GIN(nn.Module):
     def __init__(self, num_layers, num_mlp_layers, input_dim, hidden_dim, output_dim, final_dropout, learn_eps, graph_pooling_type, neighbor_pooling_type, device):
         '''
             num_layers: number of layers in the neural networks (INCLUDING the input layer)
@@ -20,7 +20,7 @@ class GraphCNN(nn.Module):
             device: which device to use
         '''
 
-        super(GraphCNN, self).__init__()
+        super(GIN, self).__init__()
 
         self.final_dropout = final_dropout
         self.device = device
@@ -36,6 +36,7 @@ class GraphCNN(nn.Module):
         ###List of batchnorms applied to the output of MLP (input of the final prediction linear layer)
         self.batch_norms = torch.nn.ModuleList()
 
+        #aici se construiesc MLP și Batch din GIN
         for layer in range(self.num_layers-1):
             if layer == 0:
                 self.mlps.append(MLP(num_mlp_layers, input_dim, hidden_dim, hidden_dim))
@@ -47,6 +48,7 @@ class GraphCNN(nn.Module):
         #Linear function that maps the hidden representation at dofferemt layers into a prediction score
         # AICI!: prediction astea reprezinta de fapt predictia de dupa fiecare strat al GCN-ului (exact cum zice in paper ca trebuie
         # sa tinem cont de reprezentarile scoase de fiecare strat)
+        #sunt acele LL care ies de după ReLU
         self.linears_prediction = torch.nn.ModuleList()
         for layer in range(num_layers):
             if layer == 0:
@@ -59,27 +61,36 @@ class GraphCNN(nn.Module):
         ###create padded_neighbor_list in concatenated graph
 
         #compute the maximum number of neighbors within the graphs in the current minibatch
+        #nr maxim de vecini al unui nod din toate grafurile
         max_deg = max([graph.max_neighbor for graph in batch_graph])
 
         padded_neighbor_list = []
-        start_idx = [0]
+        #start_idx- indicele curent al unui graf din concatenarea de grafurilor
+        #o lista care conține ”inceputul” fiecărui graf
+        start_idx = [0] 
 
-
+        #i-indexul grafului curent, graph-graful în sine , grafurile concatenate
         for i, graph in enumerate(batch_graph):
+            #This line updates the starting index for the next graph in the concatenated graph
             start_idx.append(start_idx[i] + len(graph.g))
             padded_neighbors = []
             for j in range(len(graph.neighbors)):
-                #add off-set values to the neighbor indices
+                #se va creea o  listă cu toți vecinii nodului j (poziția lor este relativă față de ”începutul grafului”)
                 pad = [n + start_idx[i] for n in graph.neighbors[j]]
-                #padding, dummy data is assumed to be stored in -1
+                #la lista se sus creeată se va adăuga elem -1 până când lista va avea aceeași dimensiune cu nr maxim de vecini
                 pad.extend([-1]*(max_deg - len(pad)))
 
                 #Add center nodes in the maxpooling if learn_eps is False, i.e., aggregate center nodes and neighbor nodes altogether.
+                #se adaugă nodul a căror vecini sunt deja în lista aia
                 if not self.learn_eps:
                     pad.append(j + start_idx[i])
-
+                #la final pad=[veicini, -1, ...-1, nod]
+                
                 padded_neighbors.append(pad)
+                #padded_neighbors va conține o listă cu toții vecinii dintr-un graf
+            
             padded_neighbor_list.extend(padded_neighbors)
+            #padded_neighbors_list va conține o listă cu toți vecinii din toate grafurile
 
         return torch.LongTensor(padded_neighbor_list)
 
@@ -89,32 +100,40 @@ class GraphCNN(nn.Module):
 
         edge_mat_list = []
         start_idx = [0]
+
+        #mergem din graf în graf
         for i, graph in enumerate(batch_graph):
+            #indexul de start al următorului graf
             start_idx.append(start_idx[i] + len(graph.g))
+            #se lipeste matricea coresp muchiilor la lista mare, se aduna start_idx pt a indica corect nodul în relație cu întregul graf
             edge_mat_list.append(graph.edge_mat + start_idx[i])
+        #se vor concatena pe X, adică una după alta, NU una sub alta
         Adj_block_idx = torch.cat(edge_mat_list, 1)
+        #se va face o matrice de 1 care va avea dimensiunea lui Adj_block_idx
         Adj_block_elem = torch.ones(Adj_block_idx.shape[1])
 
         #Add self-loops in the adjacency matrix if learn_eps is False, i.e., aggregate center nodes and neighbor nodes altogether.
 
         if not self.learn_eps:
+            #numărul total de noduri dintr-un graf
             num_node = start_idx[-1]
+            #se creează arc circular
             self_loop_edge = torch.LongTensor([range(num_node), range(num_node)])
             elem = torch.ones(num_node)
+            #matricea va conține arce circulare (de la un nod la el însuși)
             Adj_block_idx = torch.cat([Adj_block_idx, self_loop_edge], 1)
             Adj_block_elem = torch.cat([Adj_block_elem, elem], 0)
 
         Adj_block = torch.sparse.FloatTensor(Adj_block_idx, Adj_block_elem, torch.Size([start_idx[-1],start_idx[-1]]))
-
+        #va returna matricea de adiacență cu self-loop
         return Adj_block.to(self.device)
 
 
     def __preprocess_graphpool(self, batch_graph):
         ###create sum or average pooling sparse matrix over entire nodes in each graph (num graphs x num nodes)
-        
+        #listă cu noduirle de început al fiecărui graf
         start_idx = [0]
 
-        #compute the padded neighbor list
         for i, graph in enumerate(batch_graph):
             start_idx.append(start_idx[i] + len(graph.g))
 
@@ -123,22 +142,34 @@ class GraphCNN(nn.Module):
         for i, graph in enumerate(batch_graph):
             ###average pooling
             if self.graph_pooling_type == "average":
+                #dacă graful are 5 noduri, elem se va extinde cu [0.2, 0.2, 0.2, 0.2, 0.2]
                 elem.extend([1./len(graph.g)]*len(graph.g))
             
             else:
             ###sum pooling
+                #dacă graful are 5 noduri, elem se va extinde cu [1, 1, 1, 1, 1]
                 elem.extend([1]*len(graph.g))
 
+            #idx se va extinde cu perechea [indexul grafului curent, nodul din graf]
+            #exemplu: Graful 0 conține nodurile 1,2,3 => că se va extinde cu [0,0], [0,1], [0,2], [0,3]
             idx.extend([[i, j] for j in range(start_idx[i], start_idx[i+1], 1)])
+            
         elem = torch.FloatTensor(elem)
+        #facem tensori, dar la idx transpunem =>     0 0
+                                                   # 0 1
+                                                   # 0 2....
         idx = torch.LongTensor(idx).transpose(0,1)
+        #dimensiumea matricii va fi nr de grafuri * numărul de noduri
+        #va conține matricea de adiacență
         graph_pool = torch.sparse.FloatTensor(idx, elem, torch.Size([len(batch_graph), start_idx[-1]]))
         
         return graph_pool.to(self.device)
 
     def maxpool(self, h, padded_neighbor_list):
+        #param : padded_neighbor_list-listă cu toate nodurile și cu toți vecinii
         ###Element-wise minimum will never affect max-pooling
 
+        #minimul din primul feature vector???
         dummy = torch.min(h, dim = 0)[0]
         h_with_dummy = torch.cat([h, dummy.reshape((1, -1)).to(self.device)])
         pooled_rep = torch.max(h_with_dummy[padded_neighbor_list], dim = 1)[0]
@@ -192,7 +223,7 @@ class GraphCNN(nn.Module):
         h = F.relu(h)
         return h
 
-
+    
     def forward(self, batch_graph):
         X_concat = torch.cat([graph.node_features for graph in batch_graph], 0).to(self.device)
         #se creeaza unn feature map imens ce e alcatuit din feature map-urile tuturor grafurilor
